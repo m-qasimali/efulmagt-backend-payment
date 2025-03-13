@@ -23,6 +23,10 @@ const authHeader = `Basic ${Buffer.from(`:${QUICKPAY_USER_KEY}`).toString(
 async function createPaymentLink(orderId, amount, currency) {
   try {
     // Step 1: Create a payment
+    const continueUrl =
+      "http://18.225.72.138/payment-success?orderId=" + orderId;
+    const cancelUrl = "http://18.225.72.138/payment-failed";
+
     const response = await axios.post(
       BASE_URL,
       { order_id: orderId, currency: currency },
@@ -40,7 +44,7 @@ async function createPaymentLink(orderId, amount, currency) {
     // Step 2: Generate a payment link
     const linkResponse = await axios.put(
       `${BASE_URL}/${paymentId}/link`,
-      { amount: amount }, // Amount in cents (100 = $1.00)
+      { amount: amount, continue_url: continueUrl, cancel_url: cancelUrl }, // Amount in cents (100 = $1.00)
       {
         headers: {
           Authorization: authHeader,
@@ -72,25 +76,30 @@ async function verifyPayment(orderId) {
       },
     });
 
-    if (!response.data || response.data.length === 0) {
+    // Ensure response contains valid data
+    if (
+      !response.data ||
+      !Array.isArray(response.data) ||
+      response.data.length === 0
+    ) {
       throw new Error("No payment found for this order ID");
     }
 
     const payment = response.data[0];
+
     return {
       status: payment.accepted ? "Paid" : "Pending",
       transactionId: payment.id,
-      amount: payment.operations.reduce((sum, op) => sum + (op.amount || 0), 0),
-      currency: payment.currency,
+      amount:
+        payment.operations?.reduce((sum, op) => sum + (op.amount || 0), 0) || 0,
+      currency: payment.currency || "Unknown",
     };
   } catch (error) {
     console.error(
       "Error verifying payment:",
       error.response?.data || error.message
     );
-    throw new Error(
-      error.response?.data?.message || "Failed to verify payment"
-    );
+    throw new Error(error.response?.data?.message || error.message);
   }
 }
 
@@ -117,10 +126,16 @@ app.get("/verify-payment/:orderId", async (req, res) => {
       return res.status(400).json({ error: "Order ID is required" });
     }
 
-    const paymentStatus = await verifyPayment(orderId);
+    const paymentStatus = await verifyPayment(orderId); // Ensure this function is defined
+    if (!paymentStatus) {
+      return res.status(404).json({ error: "Payment not found" });
+    }
+
     res.json(paymentStatus);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res
+      .status(500)
+      .json({ error: error?.message || "Failed to verify payment" });
   }
 });
 
